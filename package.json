@@ -1,0 +1,22 @@
+{
+  "name": "stegano-graphics-website",
+  "version": "0.1.0",
+  "private": true,
+  "homepage": "https://stegano.graphics",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yxdunc/stegano-graphics-website.git"
+  },
+  "type": "module",
+  "scripts": {
+    "build:wasm": "wasm-pack build ../stegs --target web --out-dir pkg",
+    "dev": "npm run build:wasm && vite --host 127.0.0.1",
+    "build": "npm run build:wasm && vite build",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "stegs": "file:../stegs/pkg",
+    "vite": "^7.0.0"
+  },
+  "devDependencies": {}
+}
