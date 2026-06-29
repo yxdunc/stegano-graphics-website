@@ -28,7 +28,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install Rust toolchain
@@ -48,8 +48,6 @@ jobs:
 
       - name: Setup Pages
         uses: actions/configure-pages@v6
-        with:
-          enablement: true
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5
