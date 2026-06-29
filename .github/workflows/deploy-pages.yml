@@ -6,9 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages-deploy
@@ -46,14 +44,17 @@ jobs:
       - name: Build web app
         run: npm run build
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v6
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v5
-        with:
-          path: ./dist
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v5
+      - name: Publish gh-pages branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -rf /tmp/stegano-pages
+          mkdir -p /tmp/stegano-pages
+          cp -R dist/. /tmp/stegano-pages/
+          git checkout --orphan gh-pages
+          git rm -rf .
+          cp -R /tmp/stegano-pages/. .
+          touch .nojekyll
+          git add .
+          git commit -m "Deploy website"
+          git push --force origin gh-pages
