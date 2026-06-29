@@ -13,6 +13,7 @@ const backgroundAlphaInput = document.querySelector("#background-alpha");
 const backgroundTrigger = document.querySelector("#background-trigger");
 const backgroundPopover = document.querySelector("#background-popover");
 const typeInput = document.querySelector("#steg-type");
+const antialiasingInput = document.querySelector("#antialiasing");
 const svgButton = document.querySelector("#download-svg");
 const pngButton = document.querySelector("#download-png");
 const field = document.querySelector("#field");
@@ -42,6 +43,7 @@ foregroundAlphaInput.addEventListener("input", () => renderSteg());
 backgroundInput.addEventListener("input", () => renderSteg());
 backgroundAlphaInput.addEventListener("input", () => renderSteg());
 typeInput.addEventListener("change", () => renderSteg());
+antialiasingInput.addEventListener("change", () => renderSteg());
 svgButton.addEventListener("click", downloadSvg);
 pngButton.addEventListener("click", downloadPng);
 setupColorPopover(foregroundTrigger, foregroundPopover);
@@ -51,13 +53,16 @@ document.addEventListener("click", closeColorPopovers);
 function renderSteg({ updateUrl = true } = {}) {
   const lineAlpha = readAlpha(foregroundAlphaInput);
   const groundAlpha = readAlpha(backgroundAlphaInput);
-  currentSvg = generate_steg_svg(
-    messageInput.value,
-    colorWithAlpha(foregroundInput.value, lineAlpha),
-    colorWithAlpha(backgroundInput.value, groundAlpha),
-    typeInput.value
+  currentSvg = applyAntialiasing(
+    generate_steg_svg(
+      messageInput.value,
+      colorWithAlpha(foregroundInput.value, lineAlpha),
+      colorWithAlpha(backgroundInput.value, groundAlpha),
+      typeInput.value
+    )
   );
   output.innerHTML = currentSvg;
+  output.classList.toggle("no-antialiasing", !antialiasingInput.checked);
   updateSwatches();
   ignoredNote.hidden = !hasIgnoredCharacters(messageInput.value);
   fieldSignal.complexity = computeComplexity(currentSvg);
@@ -86,6 +91,8 @@ async function downloadPng() {
   canvas.width = 2400;
   canvas.height = 2400;
   const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = antialiasingInput.checked;
+  ctx.imageSmoothingQuality = antialiasingInput.checked ? "high" : "low";
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
   URL.revokeObjectURL(url);
@@ -117,6 +124,7 @@ function applyUrlParams() {
   setValue(foregroundAlphaInput, params.get("lineAlpha"));
   setValue(backgroundInput, params.get("ground"));
   setValue(backgroundAlphaInput, params.get("groundAlpha"));
+  setChecked(antialiasingInput, params.get("aa"));
 }
 
 function updateUrlParams() {
@@ -127,6 +135,7 @@ function updateUrlParams() {
   params.set("lineAlpha", normalizeAlphaParam(foregroundAlphaInput.value));
   params.set("ground", backgroundInput.value);
   params.set("groundAlpha", normalizeAlphaParam(backgroundAlphaInput.value));
+  params.set("aa", antialiasingInput.checked ? "true" : "false");
   const nextUrl = `${window.location.pathname}?${params.toString()}`;
   window.history.replaceState(null, "", nextUrl);
 }
@@ -139,6 +148,16 @@ function setValue(input, value) {
     return;
   }
   input.value = value;
+}
+
+function setChecked(input, value) {
+  if (value === null) return;
+  input.checked = !["0", "false", "off", "no"].includes(value.trim().toLowerCase());
+}
+
+function applyAntialiasing(svg) {
+  const shapeRendering = antialiasingInput.checked ? "geometricPrecision" : "crispEdges";
+  return svg.replace("<svg ", `<svg shape-rendering="${shapeRendering}" `);
 }
 
 function colorWithAlpha(hex, alpha) {

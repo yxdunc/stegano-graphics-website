@@ -23,7 +23,7 @@ jobs:
 
       - name: Clone steg library
         run: |
-          git clone --depth 1 https://github.com/${{ github.repository_owner }}/stegano-graphics.git ../stegs
+          git clone --depth 1 --branch main https://github.com/${{ github.repository_owner }}/stegano-graphics.git ../stegs
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
