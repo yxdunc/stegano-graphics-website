@@ -52,7 +52,8 @@ jobs:
           mkdir -p /tmp/stegano-pages
           cp -R dist/. /tmp/stegano-pages/
           git checkout --orphan gh-pages
-          git rm -rf .
+          git rm -rf . || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp -R /tmp/stegano-pages/. .
           touch .nojekyll
           git add .
