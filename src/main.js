@@ -338,6 +338,13 @@ function startParticleLine() {
     const radius = rect.width * 0.3;
     const push = rect.width * 0.009;
     const lineAlpha = readAlpha(foregroundAlphaInput);
+    const pathLength = points[points.length - 1]?.displayDistance || 1;
+    const travellingRadius = Math.min(50, Math.max(30, rect.width * 0.085));
+    const travellingSpan = pathLength + travellingRadius * 2;
+    const travellingDistance = (seconds * 55) % travellingSpan;
+    const travellingCenter =
+      -travellingRadius + travellingDistance;
+    const travellingPush = Math.min(2.7, Math.max(1.6, rect.width * 0.0048));
 
     for (let index = 0; index < points.length; index += 1) {
       const point = points[index];
@@ -351,6 +358,20 @@ function startParticleLine() {
         Math.sin(seconds * 0.27 + point.progress * 11) * 0.55;
       x += wobbleX;
       y += wobbleY;
+
+      const travellingDistance = point.displayDistance - travellingCenter;
+      if (Math.abs(travellingDistance) < travellingRadius) {
+        const travellingPosition = travellingDistance / travellingRadius;
+        const travellingEnvelope = Math.cos(
+          travellingPosition * Math.PI * 0.5
+        );
+        const travellingOffset =
+          Math.sin(travellingPosition * Math.PI) *
+          travellingEnvelope *
+          travellingPush * 1.15;
+        x += point.nx * travellingOffset;
+        y += point.ny * travellingOffset;
+      }
 
       if (pointer.inside) {
         const dx = x - pointer.x;
@@ -501,7 +522,38 @@ function sampleParticlePath(pathData, viewBox, displayWidth) {
     particles.push({
       ...sample,
       progress,
+      displayDistance: sample.distance * viewScale,
     });
+  }
+
+  const normalRadius = Math.min(20, Math.max(12, displayWidth * 0.035));
+  for (let index = 0; index < particles.length; index += 1) {
+    const point = particles[index];
+    let previousIndex = index;
+    let nextIndex = index;
+    while (
+      previousIndex > 0 &&
+      particles[previousIndex - 1].segment === point.segment &&
+      point.displayDistance - particles[previousIndex].displayDistance < normalRadius
+    ) {
+      previousIndex -= 1;
+    }
+    while (
+      nextIndex < particles.length - 1 &&
+      particles[nextIndex + 1].segment === point.segment &&
+      particles[nextIndex].displayDistance - point.displayDistance < normalRadius
+    ) {
+      nextIndex += 1;
+    }
+    const previous = particles[previousIndex];
+    const next = particles[nextIndex];
+    const dx = next.x - previous.x;
+    const dy = next.y - previous.y;
+    const length = Math.hypot(dx, dy);
+    if (length > 0.000001) {
+      point.nx = -dy / length;
+      point.ny = dx / length;
+    }
   }
   return particles;
 }
