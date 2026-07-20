@@ -12,6 +12,7 @@
       <section class="workbench" aria-label="steg generator">
         <div class="render-shell">
           <div id="steg-output" class="steg-output" aria-live="polite"></div>
+          <canvas id="steg-particles" class="steg-particles" aria-hidden="true" hidden></canvas>
         </div>
         <form class="controls">
           <label class="phrase">
@@ -27,8 +28,8 @@
             </select>
           </label>
           <label class="toggle-control">
-            <span>antialiasing</span>
-            <input id="antialiasing" type="checkbox" checked />
+            <span>visual effect</span>
+            <input id="visual-effect" type="checkbox" checked />
           </label>
           <div class="control-row">
             <label>
@@ -52,7 +53,19 @@
               </span>
             </label>
             <button id="download-svg" type="button">SVG</button>
-            <button id="download-png" type="button">PNG</button>
+            <span class="download-control">
+              <button id="download-png" type="button">PNG</button>
+              <span class="png-popover" id="png-popover" hidden>
+                <label class="png-aa-toggle">
+                  <span>antialiasing</span>
+                  <input id="antialiasing" type="checkbox" checked />
+                </label>
+                <span class="png-note">
+                  disable antialiasing for DTG printing on a T-shirt with a transparent background
+                </span>
+                <button id="confirm-png" type="button">download PNG</button>
+              </span>
+            </span>
           </div>
         </form>
       </section>

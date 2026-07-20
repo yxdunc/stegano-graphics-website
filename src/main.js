@@ -13,27 +13,31 @@ const backgroundAlphaInput = document.querySelector("#background-alpha");
 const backgroundTrigger = document.querySelector("#background-trigger");
 const backgroundPopover = document.querySelector("#background-popover");
 const typeInput = document.querySelector("#steg-type");
+const effectInput = document.querySelector("#visual-effect");
 const antialiasingInput = document.querySelector("#antialiasing");
 const svgButton = document.querySelector("#download-svg");
 const pngButton = document.querySelector("#download-png");
+const pngConfirmButton = document.querySelector("#confirm-png");
+const pngPopover = document.querySelector("#png-popover");
 const field = document.querySelector("#field");
+const particleCanvas = document.querySelector("#steg-particles");
+const renderShell = document.querySelector(".render-shell");
 const ignoredNote = document.querySelector("#ignored-note");
 
 let currentSvg = "";
 let scheduleBackgroundFrame = () => {};
-let uploadLineMask = () => {};
-const fieldSignal = {
-  complexity: 0.28,
-  variant: 0,
-  pulse: 0.2,
-  transparentGround: 1,
-};
+let rebuildParticleLine = () => {};
+let syncParticleEffect = () => {};
 const supportedCharacters = new Set(
   "abcdefghijklmnopqrstuvwxyz ".split("")
 );
 
 await init(wasmUrl);
+effectInput.checked = !window.matchMedia(
+  "(max-width: 759px), (pointer: coarse), (prefers-reduced-motion: reduce)"
+).matches;
 applyUrlParams();
+startParticleLine();
 renderSteg({ updateUrl: false });
 startField();
 
@@ -43,12 +47,16 @@ foregroundAlphaInput.addEventListener("input", () => renderSteg());
 backgroundInput.addEventListener("input", () => renderSteg());
 backgroundAlphaInput.addEventListener("input", () => renderSteg());
 typeInput.addEventListener("change", () => renderSteg());
+effectInput.addEventListener("change", () => {
+  syncParticleEffect();
+  renderSteg();
+});
 antialiasingInput.addEventListener("change", () => renderSteg());
 svgButton.addEventListener("click", downloadSvg);
-pngButton.addEventListener("click", downloadPng);
+setupPngPopover();
 setupColorPopover(foregroundTrigger, foregroundPopover);
 setupColorPopover(backgroundTrigger, backgroundPopover);
-document.addEventListener("click", closeColorPopovers);
+document.addEventListener("click", closePopovers);
 
 function renderSteg({ updateUrl = true } = {}) {
   const lineAlpha = readAlpha(foregroundAlphaInput);
@@ -65,12 +73,8 @@ function renderSteg({ updateUrl = true } = {}) {
   output.classList.toggle("no-antialiasing", !antialiasingInput.checked);
   updateSwatches();
   ignoredNote.hidden = !hasIgnoredCharacters(messageInput.value);
-  fieldSignal.complexity = computeComplexity(currentSvg);
-  fieldSignal.variant = typeInput.value === "fingerprint" ? 1 : 0;
-  fieldSignal.pulse = 1;
-  fieldSignal.transparentGround = groundAlpha <= 0.01 ? 1 : 0;
   if (updateUrl) updateUrlParams();
-  uploadLineMask(currentSvg);
+  rebuildParticleLine();
   scheduleBackgroundFrame();
 }
 
@@ -111,11 +115,6 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
-function computeComplexity(svg) {
-  const path = svg.match(/<path[^>]* d="([^"]+)"/)?.[1] || "";
-  return Math.min(1, Math.max(0.16, path.length / 5200));
-}
-
 function applyUrlParams() {
   const params = new URLSearchParams(window.location.search);
   setValue(messageInput, params.get("phrase"));
@@ -124,6 +123,7 @@ function applyUrlParams() {
   setValue(foregroundAlphaInput, params.get("lineAlpha"));
   setValue(backgroundInput, params.get("ground"));
   setValue(backgroundAlphaInput, params.get("groundAlpha"));
+  setChecked(effectInput, params.get("effect"));
   setChecked(antialiasingInput, params.get("aa"));
 }
 
@@ -135,6 +135,7 @@ function updateUrlParams() {
   params.set("lineAlpha", normalizeAlphaParam(foregroundAlphaInput.value));
   params.set("ground", backgroundInput.value);
   params.set("groundAlpha", normalizeAlphaParam(backgroundAlphaInput.value));
+  params.set("effect", effectInput.checked ? "true" : "false");
   params.set("aa", antialiasingInput.checked ? "true" : "false");
   const nextUrl = `${window.location.pathname}?${params.toString()}`;
   window.history.replaceState(null, "", nextUrl);
@@ -199,10 +200,24 @@ function setupColorPopover(trigger, popover) {
   trigger.addEventListener("click", (event) => {
     event.stopPropagation();
     const shouldOpen = popover.hidden;
-    closeColorPopovers();
+    closePopovers();
     popover.hidden = !shouldOpen;
   });
   popover.addEventListener("click", (event) => event.stopPropagation());
+}
+
+function setupPngPopover() {
+  pngButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const shouldOpen = pngPopover.hidden;
+    closePopovers();
+    pngPopover.hidden = !shouldOpen;
+  });
+  pngPopover.addEventListener("click", (event) => event.stopPropagation());
+  pngConfirmButton.addEventListener("click", () => {
+    pngPopover.hidden = true;
+    downloadPng();
+  });
 }
 
 function closeColorPopovers() {
@@ -210,10 +225,309 @@ function closeColorPopovers() {
   backgroundPopover.hidden = true;
 }
 
+function closePopovers() {
+  closeColorPopovers();
+  pngPopover.hidden = true;
+}
+
+function startParticleLine() {
+  const context = particleCanvas.getContext("2d", { alpha: true });
+  if (!context) return;
+
+  let points = [];
+  let displacedPoints = new Float32Array(0);
+  let renderedLineWidth = 1.5;
+  let rebuildFrame = 0;
+  let lastDraw = 0;
+  let frameAverage = 33;
+  let slowFrames = 0;
+  let stopped = false;
+  const pointer = {
+    x: 0,
+    y: 0,
+    targetX: 0,
+    targetY: 0,
+    inside: false,
+  };
+
+  syncParticleEffect = () => {
+    const enabled = effectInput.checked && !stopped;
+    particleCanvas.hidden = !enabled;
+    renderShell.classList.toggle("particle-rendering", enabled);
+  };
+  syncParticleEffect();
+
+  rebuildParticleLine = () => {
+    cancelAnimationFrame(rebuildFrame);
+    rebuildFrame = requestAnimationFrame(() => {
+      const svg = output.querySelector("svg");
+      const path = svg?.querySelector("path");
+      const viewBox = svg?.viewBox?.baseVal;
+      if (!path || !viewBox?.width || !viewBox?.height) {
+        points = [];
+        return;
+      }
+
+      points = sampleParticlePath(
+        path.getAttribute("d"),
+        { x: viewBox.x, y: viewBox.y, width: viewBox.width, height: viewBox.height },
+        Math.max(1, particleCanvas.clientWidth)
+      );
+      displacedPoints = new Float32Array(points.length * 2);
+      renderedLineWidth =
+        (Number(path.getAttribute("stroke-width")) || 1) *
+        Math.max(1, particleCanvas.clientWidth) /
+        viewBox.width;
+      particleCanvas.dataset.particleCount = String(points.length);
+    });
+  };
+
+  window.addEventListener(
+    "pointermove",
+    (event) => {
+      const rect = particleCanvas.getBoundingClientRect();
+      pointer.targetX = event.clientX - rect.left;
+      pointer.targetY = event.clientY - rect.top;
+      pointer.inside =
+        pointer.targetX >= 0 &&
+        pointer.targetY >= 0 &&
+        pointer.targetX <= rect.width &&
+        pointer.targetY <= rect.height;
+    },
+    { passive: true }
+  );
+
+  const draw = (now) => {
+    if (stopped) return;
+    requestAnimationFrame(draw);
+    if (!effectInput.checked) {
+      lastDraw = 0;
+      return;
+    }
+    if (now - lastDraw < 30) return;
+
+    if (lastDraw) {
+      const delta = now - lastDraw;
+      frameAverage = frameAverage * 0.94 + delta * 0.06;
+      if (frameAverage > 44) slowFrames += 1;
+      else slowFrames = Math.max(0, slowFrames - 2);
+      if (slowFrames > 180) {
+        stopped = true;
+        particleCanvas.hidden = true;
+        renderShell.classList.remove("particle-rendering");
+        return;
+      }
+    }
+    lastDraw = now;
+
+    const rect = particleCanvas.getBoundingClientRect();
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    const width = Math.max(1, Math.round(rect.width * pixelRatio));
+    const height = Math.max(1, Math.round(rect.height * pixelRatio));
+    if (particleCanvas.width !== width || particleCanvas.height !== height) {
+      particleCanvas.width = width;
+      particleCanvas.height = height;
+    }
+
+    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    context.clearRect(0, 0, rect.width, rect.height);
+    pointer.x += (pointer.targetX - pointer.x) * 0.18;
+    pointer.y += (pointer.targetY - pointer.y) * 0.18;
+
+    const seconds = now * 0.001;
+    const radius = rect.width * 0.3;
+    const push = rect.width * 0.009;
+    const lineAlpha = readAlpha(foregroundAlphaInput);
+
+    for (let index = 0; index < points.length; index += 1) {
+      const point = points[index];
+      let x = point.x * rect.width;
+      let y = point.y * rect.height;
+      const wobbleX =
+        Math.sin(seconds * 0.72 + point.progress * 24) * 1.35 +
+        Math.sin(seconds * 0.31 - point.progress * 9) * 0.55;
+      const wobbleY =
+        Math.cos(seconds * 0.64 + point.progress * 22) * 1.35 +
+        Math.sin(seconds * 0.27 + point.progress * 11) * 0.55;
+      x += wobbleX;
+      y += wobbleY;
+
+      if (pointer.inside) {
+        const dx = x - pointer.x;
+        const dy = y - pointer.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance < radius) {
+          const directionX = distance > 0.01 ? dx / distance : point.nx;
+          const directionY = distance > 0.01 ? dy / distance : point.ny;
+          const proximity = 1 - distance / radius;
+          const smoothForce = proximity * proximity * (3 - 2 * proximity);
+          const centerSoftening = 0.08 + 0.92 * (1 - proximity * proximity);
+          const force = smoothForce * centerSoftening;
+          x += directionX * force * push;
+          y += directionY * force * push;
+        }
+      }
+
+      displacedPoints[index * 2] = x;
+      displacedPoints[index * 2 + 1] = y;
+    }
+
+    context.strokeStyle = foregroundInput.value;
+    context.globalAlpha = lineAlpha;
+    context.lineWidth = antialiasingInput.checked
+      ? renderedLineWidth
+      : Math.max(1, Math.round(renderedLineWidth));
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.beginPath();
+    for (let index = 0; index < points.length; index += 1) {
+      const x = displacedPoints[index * 2];
+      const y = displacedPoints[index * 2 + 1];
+      if (index === 0 || points[index - 1].segment !== points[index].segment) {
+        context.moveTo(x, y);
+      } else {
+        context.lineTo(x, y);
+      }
+    }
+    context.stroke();
+    context.globalAlpha = 1;
+  };
+
+  requestAnimationFrame(draw);
+}
+
+function sampleParticlePath(pathData, viewBox, displayWidth) {
+  const tokens = pathData.match(/[A-Za-z]|[-+]?(?:\d*\.)?\d+(?:e[-+]?\d+)?/gi) || [];
+  const samples = [];
+  let tokenIndex = 0;
+  let currentX = 0;
+  let currentY = 0;
+  let distance = 0;
+  let segment = 0;
+  const viewScale = displayWidth / viewBox.width;
+  const sampleSpacing = 0.85;
+
+  const addPoint = (x, y, nx, ny, distanceIncrement = 0) => {
+    distance += distanceIncrement;
+    samples.push({
+      x: (x - viewBox.x) / viewBox.width,
+      y: (y - viewBox.y) / viewBox.height,
+      nx,
+      ny,
+      distance,
+      segment,
+    });
+  };
+
+  while (tokenIndex < tokens.length) {
+    const command = tokens[tokenIndex++];
+    if (command === "M") {
+      segment += 1;
+      currentX = Number(tokens[tokenIndex++]);
+      currentY = Number(tokens[tokenIndex++]);
+      addPoint(currentX, currentY, 0, -1);
+      continue;
+    }
+
+    if (command === "L") {
+      const endX = Number(tokens[tokenIndex++]);
+      const endY = Number(tokens[tokenIndex++]);
+      const dx = endX - currentX;
+      const dy = endY - currentY;
+      const length = Math.hypot(dx, dy);
+      const steps = Math.max(1, Math.ceil(length * viewScale / sampleSpacing));
+      const nx = -dy / Math.max(0.001, length);
+      const ny = dx / Math.max(0.001, length);
+      for (let step = 1; step <= steps; step += 1) {
+        const amount = step / steps;
+        addPoint(
+          currentX + dx * amount,
+          currentY + dy * amount,
+          nx,
+          ny,
+          length / steps
+        );
+      }
+      currentX = endX;
+      currentY = endY;
+      continue;
+    }
+
+    if (command === "A") {
+      const radiusX = Number(tokens[tokenIndex++]);
+      const radiusY = Number(tokens[tokenIndex++]);
+      tokenIndex += 1;
+      const largeArc = Number(tokens[tokenIndex++]) === 1;
+      const sweep = Number(tokens[tokenIndex++]) === 1;
+      const endX = Number(tokens[tokenIndex++]);
+      const endY = Number(tokens[tokenIndex++]);
+      if (Math.hypot(endX - currentX, endY - currentY) < 0.001) {
+        currentX = endX;
+        currentY = endY;
+        continue;
+      }
+      const arc = resolveCircularArc(currentX, currentY, endX, endY, Math.max(radiusX, radiusY), largeArc, sweep);
+      const arcLength = Math.abs(arc.delta) * arc.radius;
+      const steps = Math.max(2, Math.ceil(arcLength * viewScale / sampleSpacing));
+      for (let step = 1; step <= steps; step += 1) {
+        const angle = arc.start + arc.delta * step / steps;
+        const nx = Math.cos(angle);
+        const ny = Math.sin(angle);
+        addPoint(
+          arc.cx + nx * arc.radius,
+          arc.cy + ny * arc.radius,
+          nx,
+          ny,
+          arcLength / steps
+        );
+      }
+      currentX = endX;
+      currentY = endY;
+      continue;
+    }
+
+    throw new Error(`Unsupported steg path command: ${command}`);
+  }
+
+  const totalDistance = Math.max(1, distance);
+  const projectedLength = totalDistance * viewScale;
+  const complexityCount = Math.max(600, Math.min(14000, Math.ceil(projectedLength / 0.95)));
+  const targetCount = Math.min(complexityCount, samples.length);
+  const particles = [];
+  for (let index = 0; index < targetCount; index += 1) {
+    const sourceIndex = Math.round(index * (samples.length - 1) / Math.max(1, targetCount - 1));
+    const sample = samples[sourceIndex];
+    const progress = sample.distance / totalDistance;
+    particles.push({
+      ...sample,
+      progress,
+    });
+  }
+  return particles;
+}
+
+function resolveCircularArc(startX, startY, endX, endY, requestedRadius, largeArc, sweep) {
+  const halfX = (startX - endX) * 0.5;
+  const halfY = (startY - endY) * 0.5;
+  const halfDistanceSquared = halfX * halfX + halfY * halfY;
+  const radius = Math.max(requestedRadius, Math.sqrt(halfDistanceSquared));
+  const factorSign = largeArc === sweep ? -1 : 1;
+  const factor = factorSign * Math.sqrt(Math.max(0, (radius * radius - halfDistanceSquared) / Math.max(0.0001, halfDistanceSquared)));
+  const cx = (startX + endX) * 0.5 + factor * halfY;
+  const cy = (startY + endY) * 0.5 - factor * halfX;
+  const start = Math.atan2(startY - cy, startX - cx);
+  const end = Math.atan2(endY - cy, endX - cx);
+  let delta = end - start;
+  if (sweep && delta < 0) delta += Math.PI * 2;
+  if (!sweep && delta > 0) delta -= Math.PI * 2;
+  return { cx, cy, radius, start, delta };
+}
+
 function startField() {
   const gl = field.getContext("webgl", { antialias: false, alpha: true });
   if (!gl) return;
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const disableAnimation = window.matchMedia("(max-width: 759px), (pointer: coarse)").matches;
   const pointer = {
     currentX: 0.5,
     currentY: 0.5,
@@ -224,15 +538,10 @@ function startField() {
   let quality = window.innerWidth < 760 ? 0.62 : 0.9;
   let frameAverage = 16.7;
   let slowFrames = 0;
-  let paused = reduceMotion;
+  let paused = reduceMotion || disableAnimation;
   let disabled = false;
   let pendingFrame = false;
   let lastFrame = 0;
-  const maskSize = 128;
-  const maskCanvas = document.createElement("canvas");
-  maskCanvas.width = maskSize;
-  maskCanvas.height = maskSize;
-  const maskContext = maskCanvas.getContext("2d");
 
   const vertex = compileShader(gl, gl.VERTEX_SHADER, `
     attribute vec2 position;
@@ -246,67 +555,19 @@ function startField() {
     uniform float time;
     uniform vec2 mouse;
     uniform float motion;
-    uniform float complexity;
-    uniform float variant;
-    uniform float transparentGround;
-    uniform sampler2D lineMask;
-    uniform vec4 stegRect;
 
     float hash(vec2 p) {
       return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
     }
 
-    vec2 hash2(vec2 p) {
-      return fract(sin(vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)))) * 43758.5453);
-    }
-
-    float particleLayer(vec2 uv, float density, float size, float speed, float seed) {
-      vec2 grid = uv * density;
-      vec2 cell = floor(grid);
-      vec2 local = fract(grid) - 0.5;
-      vec2 rnd = hash2(cell + seed);
-      vec2 drift = vec2(
-        sin(time * speed + rnd.x * 6.283),
-        cos(time * speed * 0.73 + rnd.y * 6.283)
-      ) * 0.22;
-      vec2 point = rnd - 0.5 + drift;
-      float d = length(local - point);
-      float star = smoothstep(size, 0.0, d);
-      float gate = step(0.58 - complexity * 0.16, hash(cell + seed * 7.13));
-      return star * gate;
-    }
-
     void main() {
       vec2 screen = gl_FragCoord.xy / resolution;
-      vec2 uv = (gl_FragCoord.xy - 0.5 * resolution) / min(resolution.x, resolution.y);
-      vec2 pull = mouse - vec2(0.5);
-      float r = length(uv);
-      float swirl = atan(uv.y, uv.x) * (0.035 + 0.03 * variant) * complexity;
-      mat2 rot = mat2(cos(swirl), -sin(swirl), sin(swirl), cos(swirl));
-      uv = rot * (uv + pull * motion * 0.055);
-      uv.y += time * 0.012;
-
-      vec2 stegUv = (screen - stegRect.xy) / max(stegRect.zw, vec2(0.001));
-      float insideSteg = step(0.0, stegUv.x) * step(0.0, stegUv.y) * step(stegUv.x, 1.0) * step(stegUv.y, 1.0);
-      float mask = texture2D(lineMask, vec2(stegUv.x, 1.0 - stegUv.y)).a * insideSteg;
-      float maskGlow = max(mask, texture2D(lineMask, vec2(stegUv.x + 0.012, 1.0 - stegUv.y)).a * insideSteg);
-      maskGlow = max(maskGlow, texture2D(lineMask, vec2(stegUv.x - 0.012, 1.0 - stegUv.y)).a * insideSteg);
-      maskGlow = max(maskGlow, texture2D(lineMask, vec2(stegUv.x, 1.0 - stegUv.y + 0.012)).a * insideSteg);
-      maskGlow = max(maskGlow, texture2D(lineMask, vec2(stegUv.x, 1.0 - stegUv.y - 0.012)).a * insideSteg);
-      float lineField = smoothstep(0.04, 0.54, maskGlow) * transparentGround;
-      float halo = smoothstep(0.01, 0.38, maskGlow) * transparentGround;
-      float fine = particleLayer(uv, mix(18.0, 25.0, complexity), 0.066, 0.22, 1.0);
-      float far = particleLayer(uv + vec2(4.7, -2.1), mix(9.0, 13.0, complexity), 0.052, 0.17, 8.0);
-      float wake = smoothstep(0.30, 0.0, distance(mouse, screen)) * motion;
-      float lineFine = particleLayer(uv + vec2(1.7, -0.8), mix(28.0, 38.0, complexity), 0.048, 0.36, 21.0);
-      float lineParticles = (fine * 1.45 + lineFine * 1.15) * lineField;
-      float constellation = fine * 0.52 + lineParticles + far * 0.26 + wake * 0.16;
-      float vignette = smoothstep(1.18, 0.08, r);
-      float veil = constellation * vignette;
-      vec3 ink = vec3(0.015, 0.024, 0.032);
-      vec3 ember = vec3(0.18, 0.13, 0.08);
-      vec3 blue = vec3(0.04, 0.12, 0.15);
-      vec3 color = ink + blue * (0.15 + veil * 0.68) + ember * pow(max(0.0, veil + lineParticles * 0.72), 1.28);
+      float vignette = smoothstep(0.82, 0.12, distance(screen, vec2(0.5)));
+      float scan = 0.5 + 0.5 * sin(gl_FragCoord.y * 0.48 + time * 0.42);
+      float grain = hash(floor(gl_FragCoord.xy * 0.45) + floor(time * 3.0)) - 0.5;
+      float wake = smoothstep(0.24, 0.0, distance(screen, mouse)) * motion;
+      vec3 color = vec3(0.012, 0.017, 0.020);
+      color += vec3(0.012) * (scan * 0.12 + grain * 0.16 + wake * 0.28) * vignette;
       gl_FragColor = vec4(color, 1.0);
     }
   `);
@@ -329,57 +590,8 @@ function startField() {
   const time = gl.getUniformLocation(program, "time");
   const mouse = gl.getUniformLocation(program, "mouse");
   const motion = gl.getUniformLocation(program, "motion");
-  const complexity = gl.getUniformLocation(program, "complexity");
-  const variant = gl.getUniformLocation(program, "variant");
-  const transparentGround = gl.getUniformLocation(program, "transparentGround");
-  const lineMask = gl.getUniformLocation(program, "lineMask");
-  const stegRect = gl.getUniformLocation(program, "stegRect");
   gl.enableVertexAttribArray(position);
   gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
-
-  const lineMaskTexture = gl.createTexture();
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, lineMaskTexture);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  gl.texImage2D(
-    gl.TEXTURE_2D,
-    0,
-    gl.RGBA,
-    maskSize,
-    maskSize,
-    0,
-    gl.RGBA,
-    gl.UNSIGNED_BYTE,
-    null
-  );
-  gl.uniform1i(lineMask, 0);
-
-  uploadLineMask = async (svg) => {
-    if (!maskContext || !lineMaskTexture) return;
-    const maskSvg = svg
-      .replace(/<rect\b[^>]*><\/rect>|<rect\b[^>]*\/>/g, "")
-      .replace(/stroke="[^"]*"/, 'stroke="#ffffff"')
-      .replace(/stroke-width="[^"]*"/, 'stroke-width="28"');
-    const url = URL.createObjectURL(new Blob([maskSvg], { type: "image/svg+xml" }));
-    const image = new Image();
-    image.decoding = "async";
-    image.src = url;
-    try {
-      await image.decode();
-      maskContext.clearRect(0, 0, maskSize, maskSize);
-      maskContext.drawImage(image, 0, 0, maskSize, maskSize);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, lineMaskTexture);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, maskCanvas);
-      scheduleDraw();
-    } finally {
-      URL.revokeObjectURL(url);
-    }
-  };
-  uploadLineMask(currentSvg);
 
   window.addEventListener(
     "pointermove",
@@ -387,7 +599,7 @@ function startField() {
       pointer.targetX = event.clientX / Math.max(1, window.innerWidth);
       pointer.targetY = 1 - event.clientY / Math.max(1, window.innerHeight);
       pointer.energy = Math.min(1, pointer.energy + 0.18);
-      if (paused && !reduceMotion && !disabled) {
+      if (paused && !reduceMotion && !disableAnimation && !disabled) {
         paused = false;
         scheduleDraw();
       } else if (paused) {
@@ -431,23 +643,11 @@ function startField() {
     pointer.currentX += (pointer.targetX - pointer.currentX) * 0.075;
     pointer.currentY += (pointer.targetY - pointer.currentY) * 0.075;
     pointer.energy *= 0.965;
-    fieldSignal.pulse *= 0.96;
 
     gl.uniform2f(resolution, field.width, field.height);
     gl.uniform1f(time, now * 0.001);
     gl.uniform2f(mouse, pointer.currentX, pointer.currentY);
-    gl.uniform1f(motion, Math.max(pointer.energy, fieldSignal.pulse));
-    gl.uniform1f(complexity, fieldSignal.complexity);
-    gl.uniform1f(variant, fieldSignal.variant);
-    gl.uniform1f(transparentGround, fieldSignal.transparentGround);
-    const rect = output.getBoundingClientRect();
-    gl.uniform4f(
-      stegRect,
-      rect.left / Math.max(1, window.innerWidth),
-      1 - (rect.bottom / Math.max(1, window.innerHeight)),
-      rect.width / Math.max(1, window.innerWidth),
-      rect.height / Math.max(1, window.innerHeight)
-    );
+    gl.uniform1f(motion, pointer.energy);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     if (!paused) scheduleDraw();
   };

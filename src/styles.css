@@ -42,6 +42,7 @@ body {
 }
 
 .render-shell {
+  position: relative;
   display: grid;
   aspect-ratio: 1;
   min-width: 0;
@@ -49,11 +50,29 @@ body {
 }
 
 .steg-output {
+  grid-area: 1 / 1;
   width: min(100%, 72vh);
   aspect-ratio: 1;
   border-radius: 18px;
   filter: drop-shadow(0 0 26px rgba(245, 194, 102, 0.13));
   overflow: hidden;
+}
+
+.steg-particles {
+  z-index: 1;
+  grid-area: 1 / 1;
+  display: block;
+  width: min(100%, 72vh);
+  aspect-ratio: 1;
+  pointer-events: none;
+}
+
+.steg-particles[hidden] {
+  display: none;
+}
+
+.render-shell.particle-rendering .steg-output path {
+  opacity: 0;
 }
 
 .steg-output svg {
@@ -195,6 +214,62 @@ input[type="color"] {
 
 .color-popover input[type="color"] {
   width: 56px;
+}
+
+.download-control {
+  position: relative;
+  display: block;
+}
+
+.download-control > button {
+  width: 100%;
+}
+
+.png-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 4;
+  display: grid;
+  gap: 10px;
+  width: min(286px, calc(100vw - 32px));
+  padding: 12px;
+  border: 1px solid rgba(233, 224, 203, 0.14);
+  border-radius: 8px;
+  background: rgba(5, 7, 8, 0.92);
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(18px);
+}
+
+.png-popover[hidden] {
+  display: none;
+}
+
+.png-aa-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 32px;
+}
+
+.png-aa-toggle input {
+  width: 38px;
+  height: 20px;
+  margin: 0;
+  accent-color: #f5c266;
+  cursor: pointer;
+}
+
+.png-note {
+  color: rgba(233, 224, 203, 0.42);
+  font-size: 11px;
+  line-height: 1.45;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.png-popover button {
+  width: 100%;
 }
 
 input[type="range"] {
